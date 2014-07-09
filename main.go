@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/ka2n/ramen3/yo"
 	"log"
 	"net/http"
 	"os"
@@ -13,27 +14,34 @@ import (
 
 type Queue struct {
 	Name string
-	ID   int
+	ID   int64
 	Wait int32
 }
 
-func sendrepyo(ch chan *Queue) {
+func reply(ch chan *Queue) {
+	client := yo.DefaultClient
 	wg := &sync.WaitGroup{}
+
 	for queue := range ch {
-		log.Println(queue)
 		wg.Add(1)
-		go func(q *Queue) {
+		go func(q *Queue, c *yo.Client) {
 			time.Sleep(time.Second * time.Duration(q.Wait))
-			log.Println(fmt.Sprintf("reply to Yo %s, %d", q.Name, q.ID))
+
+			if err := c.Yo(q.Name); err != nil {
+				log.Println("Yo failed with error:", err, q.Name)
+			} else {
+				log.Println("Yo", q.Name)
+			}
 			wg.Done()
-		}(queue)
+		}(queue, client)
 	}
+
 	wg.Wait()
 }
 
-func serveyo(ch chan *Queue) {
+func serve(ch chan *Queue) {
 	// start server
-	http.HandleFunc("/api/callback/5", genHandler(5, ch))
+	http.HandleFunc("/hook/3", genHandler(3*60, ch))
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -45,14 +53,20 @@ func serveyo(ch chan *Queue) {
 
 func genHandler(wait int32, ch chan *Queue) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		uname := r.FormValue("username")
-		fmt.Fprint(w, "OK", uname)
+		u := r.FormValue("username")
+		if u == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		log.Printf("Queue <- Yo to %s after %dsec", u, wait)
+		fmt.Fprint(w, "OK,", u)
 
 		go (func() {
 			cntn := atomic.AddInt64(&cnt, 1)
 			ch <- &Queue{
-				ID:   int(cntn),
-				Name: uname,
+				ID:   cntn,
+				Name: u,
 				Wait: wait,
 			}
 		})()
@@ -65,9 +79,10 @@ var cnt int64
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
+	cnt = 0
 	q = make(chan *Queue)
 	defer close(q)
 
-	go sendrepyo(q)
-	serveyo(q)
+	go reply(q)
+	serve(q)
 }
